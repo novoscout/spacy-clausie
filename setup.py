@@ -16,17 +16,17 @@ install_requires = [
     "fastenum @ git+https://gitlab.com/austinjp/fastenum.git@bugfix/mypy-plugin-nodes-issues"
 ]
 
+
 setup(
     name="claucy",
-    version="0.0.2.000",
-    # scripts=['claucy/__init__.py', 'clausiepy/__init__.py'],
+    version="0.0.3",
     packages=packages,
     install_requires=install_requires,
     test_suite="tests.test_suite",
     author="Emmanouil Theofanis Chourdakis",
     author_email="etchourdakis@gmail.com",
     description="A reimplementation of ClausIE Information Extraction System in python",
-    url="https://github.com/mmxgn/spacy-clausie",
+    url="https://github.com/novoscout/spacy-clausie",
     keywords="openie clausie information extraction spacy",
     include_package_data=True,
 )
