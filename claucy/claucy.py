@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
 
-import spacy
-import lemminflect
-import logging
-from typing import Any, Generator, List, Optional, Set, Tuple, Union
+# import lemminflect
+# import spacy
+from typing import Any, Generator, List, Literal, Optional, Set, Tuple, Union
 
+from lemminflect import getInflection
+from spacy import Language
 from spacy.tokens import Span, Doc, Token
 from spacy.matcher import Matcher
-from lemminflect import getInflection
 
+import logging
 logging.basicConfig(level=logging.INFO)
 
 # DO NOT SET MANUALLY
-MOD_CONSERVATIVE: bool = False
+_MOD_CONSERVATIVE: bool = False
 
 Doc.set_extension("clauses", default=[], force=True)
 Span.set_extension("clauses", default=[], force=True)
 
 from .dictionary import dictionary
+from .enums import ClauseType
 
 
 class Clause:
@@ -64,10 +66,10 @@ class Clause:
         if self.subject and hasattr(self.subject,"doc"):
             self.doc = self.subject.doc
 
-        self.type = self._get_clause_type()
+        self.type: ClauseType = self._get_clause_type()
 
 
-    def _get_clause_type(self) -> str:
+    def _get_clause_type(self) -> ClauseType:
         has_verb: bool = bool(self.verb != None)
         has_complement: bool = bool(self.complement != None)
         has_adverbial: bool = bool(
@@ -96,37 +98,37 @@ class Clause:
                 and self.verb.root.lemma_ in dictionary["complex_transitive"]
             )
 
-        conservative: bool = MOD_CONSERVATIVE
+        conservative: bool = _MOD_CONSERVATIVE
         has_direct_object: bool = bool(self.direct_object != None)
         has_indirect_object: bool = bool(self.indirect_object != None)
         has_object: bool = has_direct_object or has_indirect_object
 
-        clause_type: str = "undefined"
+        clause_type: ClauseType = ClauseType.undefined
 
         if not has_verb:
-            clause_type = "SVC"
+            clause_type = ClauseType.SVC
             return clause_type
 
         if has_object:
             if has_direct_object and has_indirect_object:
-                clause_type = "SVOO"
+                clause_type = ClauseType.SVOO
             elif has_complement:
-                clause_type = "SVOC"
+                clause_type = ClauseType.SVOC
             elif not has_adverbial or not has_direct_object:
-                clause_type = "SVO"
+                clause_type = ClauseType.SVO
             elif complex_transitive or conservative:
-                clause_type = "SVOA"
+                clause_type = ClauseType.SVOA
             else:
-                clause_type = "SVO"
+                clause_type = ClauseType.SVO
         else:
             if has_complement:
-                clause_type = "SVC"
+                clause_type = ClauseType.SVC
             elif not has_adverbial or has_non_ext_copular_verb:
-                clause_type = "SV"
+                clause_type = ClauseType.SV
             elif has_ext_copular_verb or conservative:
-                clause_type = "SVA"
+                clause_type = ClauseType.SVA
             else:
-                clause_type = "SV"
+                clause_type = ClauseType.SV
 
         return clause_type
 
@@ -144,24 +146,28 @@ class Clause:
 
 
     @property
-    def propositions(
+    def propositions(self) -> Generator[Union[Tuple[Span, ...],Tuple[Any, ...]], None, None]:
+        yield from self.get_propositions(inflection=False)
+
+
+    def get_propositions(
             self,
             as_text: bool = False,
-            inflection: Optional[str] = "VBD",
+            inflection: Optional[Union[str,Literal[False]]] = "VBD",
             capitalize: bool = False
     ) -> Generator[Union[Tuple[Span, ...],Tuple[Any, ...]], None, None]:
         if inflection and not as_text:
-            # logging.warning(
-            #     "`inflection' argument is ignored when `as_text==False'. "
-            #     "To suppress this warning call `propositions' with the argument `inflection=None'"
-            # )
-            pass
+            logging.warning(
+                "`inflection' argument is ignored when `as_text==False'. "
+                "To suppress this warning call `propositions' with the argument `inflection=None'"
+            )
+
         if capitalize and not as_text:
-            # logging.warning(
-            #     "`capitalize' argument is ignored when `as_text==False'. "
-            #     "To suppress this warning call `propositions' with the argument `capitalize=False"
-            # )
-            pass
+            logging.warning(
+                "`capitalize' argument is ignored when `as_text==False'. "
+                "To suppress this warning call `propositions' with the argument `capitalize=False"
+            )
+
         subjects:         List[Span] = extract_ccs_from_token_at_root(self.subject)
         direct_objects:   List[Span] = extract_ccs_from_token_at_root(self.direct_object)
         indirect_objects: List[Span] = extract_ccs_from_token_at_root(self.indirect_object)
@@ -247,7 +253,7 @@ class Clause:
     # def to_propositions(
     #         self,
     #         as_text: bool = False,
-    #         inflection: Optional[str] = "VBD",
+    #         inflection: Optional[Union[str,Literal[False]]] = "VBD",
     #         capitalize: bool = False
     # ) -> List[Union[Tuple[Span,str,Span],Tuple[Span,Span,Span],Tuple[Span,Span,Span,Span],]]:
     # 
@@ -345,7 +351,7 @@ class Clause:
     #     return propositions
 
 
-def inflect_token(token: Token, inflection: Optional[str] = "VBD",) -> str:
+def inflect_token(token: Token, inflection: Optional[Union[str,Literal[False]]] = "VBD",) -> str:
     tt: Token
     if (
             inflection
@@ -369,7 +375,7 @@ def _convert_clauses_to_text(
         ] = [],
         inflection: Optional[str] = "VBD",
         capitalize: bool = False
-) -> List[str]:
+) -> Generator[str, None, None]:
     proposition_texts: List[str] = []
     prop: Union[
         Tuple[Span,str,Span],
@@ -442,22 +448,20 @@ def _get_verb_chunks(span:Span) -> Generator[Span, None, None]:
             yield match
 
 
-def _get_subject(verb):
-    root = verb.root
-    while root:
+def _get_subject(verb: Span) -> Union[None,Span]:
+    root: Token = verb.root
+    head: Token = root.head
+    while root != head:
         # Can we find subject at current level?
+        c: Token
         for c in root.children:
             if c.dep_ in ["nsubj", "nsubjpass"]:
-                subject = extract_span_from_entity(c)
+                subject: Span = extract_span_from_entity(c)
                 return subject
 
         # ... otherwise recurse up one level
-        if (root.dep_ in ["conj", "cc", "advcl", "acl", "ccomp"]
-            and root != root.head):
+        if root.dep_ in ["conj", "cc", "advcl", "acl", "ccomp"]:
             root = root.head
-        else:
-            root = None
-
     return None
 
 
@@ -471,9 +475,9 @@ def _find_matching_child(root, allowed_types):
 def extract_clauses(span: Span) -> List[Clause]:
     clauses: List[Clause] = []
 
+    verb: Span
     for verb in _get_verb_chunks(span):
-
-        subject = _get_subject(verb)
+        subject: Union[Span,Literal[None]] = _get_subject(verb)
         if not subject:
             continue
 
@@ -513,7 +517,7 @@ def extract_clauses(span: Span) -> List[Clause]:
     return clauses
 
 
-@spacy.Language.component('claucy')
+@Language.component('claucy')
 def extract_clauses_doc(doc) -> Doc:
     sent: Span
     for sent in doc.sents:
@@ -523,7 +527,7 @@ def extract_clauses_doc(doc) -> Doc:
     return doc
 
 
-def add_to_pipe(nlp: spacy.Language) -> None:
+def add_to_pipe(nlp: Language) -> None:
     nlp.add_pipe('claucy')
 
 
