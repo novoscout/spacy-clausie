@@ -1,7 +1,12 @@
-from fastenum import Enum as FEnum
+from typing import List
+
+__all__ : List[str] = [
+    "ClauseType",
+    "Complement"
+]
 
 
-class ClauseType(FEnum):
+class ClauseType:
     undefined: None = None
     SV:        str  = "SV"
     SVA:       str  = "SVA"
@@ -11,8 +16,6 @@ class ClauseType(FEnum):
     SVOC:      str  = "SVOC"
     SVOO:      str  = "SVOO"
 
-    def __str__(self) -> str:
-        return self.__repr__()
 
-    def __repr__(self) -> str:
-        return str(self.name)
+class Complement:
+    be: str = "be"
