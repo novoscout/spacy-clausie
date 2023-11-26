@@ -13,7 +13,7 @@ packages = find_packages()
 install_requires = [
     "spacy>=3.0.0",
     "lemminflect>=0.2.1",
-    "fastenum @ git+https://gitlab.com/austinjp/fastenum.git@bugfix/mypy-plugin-nodes-issues"
+    # "fastenum @ git+https://gitlab.com/austinjp/fastenum.git@bugfix/mypy-plugin-nodes-issues"
 ]
 
 
