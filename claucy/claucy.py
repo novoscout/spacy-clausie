@@ -14,10 +14,12 @@ from spacy import Language
 from spacy.tokens import Span, Doc, Token
 from spacy.matcher import Matcher
 
-from .dictionary import dictionary
-from .consts import ClauseType
-from .consts import Complement
-
+from .consts import (
+    ClauseTypeUndefined, ClauseTypeSV, ClauseTypeSVA, ClauseTypeSVC,
+    ClauseTypeSVO, ClauseTypeSVOA, ClauseTypeSVOC, ClauseTypeSVOO,
+    ComplementBe, dictionary, verb_phrase_rules
+)
+from .custom_types import PropositionType, PropositionTypes
 
 Doc.set_extension("clauses", default=[], force=True)
 Span.set_extension("clauses", default=[], force=True)
@@ -37,27 +39,15 @@ def add_to_pipe(nlp: Language) -> None:
     nlp.add_pipe("claucy")
 
 
-PropositionType = TypeVar(
-    "PropositionType",
-    Span,
-    str,
-)
-PropositionTypes = Tuple[PropositionType, ...]
-
-
-# DO NOT SET MANUALLY
-_MOD_CONSERVATIVE: bool = False
-
-
 class Clause:
     def __init__(
-        self,
-        subject:         Optional[Span]        = None,
-        verb:            Optional[Span]        = None,
-        indirect_object: Optional[Span]        = None,
-        direct_object:   Optional[Span]        = None,
-        complement:      Optional[Span]        = None,
-        adverbials:      Optional[List[Span]]  = [],
+            self,
+            subject:         Optional[Span]        = None,
+            verb:            Optional[Span]        = None,
+            indirect_object: Optional[Span]        = None,
+            direct_object:   Optional[Span]        = None,
+            complement:      Optional[Span]        = None,
+            adverbials:      Optional[List[Span]]  = [],
     ) -> None:
         """
 
@@ -96,7 +86,7 @@ class Clause:
         self.type: str = self._get_clause_type()
 
 
-    def _get_clause_type(self) -> str:
+    def _get_clause_type(self,conservative:bool=False) -> str:
         has_verb: bool = bool(self.verb != None)
         has_complement: bool = bool(self.complement != None)
         has_adverbial: bool = bool(
@@ -125,37 +115,36 @@ class Clause:
                 and self.verb.root.lemma_ in dictionary["complex_transitive"]
             )
 
-        conservative: bool = _MOD_CONSERVATIVE
         has_direct_object: bool = bool(self.direct_object != None)
         has_indirect_object: bool = bool(self.indirect_object != None)
         has_object: bool = has_direct_object or has_indirect_object
 
-        clause_type: str = "undefined"
+        clause_type: str = ClauseTypeUndefined
 
         if not has_verb:
-            clause_type = ClauseType.SVC
+            clause_type = ClauseTypeSVC
             return clause_type
 
         if has_object:
             if has_direct_object and has_indirect_object:
-                clause_type = ClauseType.SVOO
+                clause_type = ClauseTypeSVOO
             elif has_complement:
-                clause_type = ClauseType.SVOC
+                clause_type = ClauseTypeSVOC
             elif not has_adverbial or not has_direct_object:
-                clause_type = ClauseType.SVO
+                clause_type = ClauseTypeSVO
             elif complex_transitive or conservative:
-                clause_type = ClauseType.SVOA
+                clause_type = ClauseTypeSVOA
             else:
-                clause_type = ClauseType.SVO
+                clause_type = ClauseTypeSVO
         else:
             if has_complement:
-                clause_type = ClauseType.SVC
+                clause_type = ClauseTypeSVC
             elif not has_adverbial or has_non_ext_copular_verb:
-                clause_type = ClauseType.SV
+                clause_type = ClauseTypeSV
             elif has_ext_copular_verb or conservative:
-                clause_type = ClauseType.SVA
+                clause_type = ClauseTypeSVA
             else:
-                clause_type = ClauseType.SV
+                clause_type = ClauseTypeSV
 
         return clause_type
 
@@ -205,9 +194,8 @@ class Clause:
 
         seen: Set[PropositionTypes] = set()
 
-        @lru_cache(typed=True)
+        @lru_cache(typed=True,maxsize=10000)
         def should_yield(i:PropositionTypes) -> bool:
-            logging.warning("{}".format([ type(_) for _ in i]))
             if i not in seen:
                 seen.add(i)
                 return True
@@ -220,13 +208,13 @@ class Clause:
             if complements and not verbs:
                 complement: Span
                 for complement in complements:
-                    ret = tuple([subj, Complement.be, complement])
+                    ret = tuple([subj, ComplementBe, complement])
                     if should_yield(ret):
                         if as_text:
                             yield from _convert_clauses_to_text(ret,inflection,capitalize)
                         else:
                             yield ret
-                ret = tuple([subj, Complement.be]) + tuple(complements)
+                ret = tuple([subj, ComplementBe]) + tuple(complements)
                 if should_yield(ret):
                     if as_text:
                         yield from _convert_clauses_to_text(ret,inflection,capitalize)
@@ -236,7 +224,7 @@ class Clause:
             verb: Span
             for verb in verbs:
                 prop: List[Span] = [subj, verb]
-                if self.type in [ClauseType.SV, ClauseType.SVA]:
+                if self.type in [ClauseTypeSV, ClauseTypeSVA]:
                     if self.adverbials:
                         a1: Span
                         for a1 in self.adverbials:
@@ -259,7 +247,7 @@ class Clause:
                                 yield from _convert_clauses_to_text(ret,inflection,capitalize)
                             else:
                                 yield ret
-                elif self.type == ClauseType.SVOO:
+                elif self.type == ClauseTypeSVOO:
                     iobj: Span
                     dobj: Span
                     for iobj in indirect_objects:
@@ -270,7 +258,7 @@ class Clause:
                                     yield from _convert_clauses_to_text(ret,inflection,capitalize)
                                 else:
                                     yield ret
-                elif self.type == ClauseType.SVO:
+                elif self.type == ClauseTypeSVO:
                     svo_obj: Span
                     for svo_obj in direct_objects + indirect_objects:
                         ret = tuple([subj, verb, svo_obj])
@@ -288,7 +276,7 @@ class Clause:
                                         yield from _convert_clauses_to_text(ret,inflection,capitalize)
                                     else:
                                         yield ret
-                elif self.type == ClauseType.SVOA:
+                elif self.type == ClauseTypeSVOA:
                     svoa_obj: Span
                     for svoa_obj in direct_objects:
                         if self.adverbials:
@@ -307,7 +295,7 @@ class Clause:
                                 else:
                                     yield ret
 
-                elif self.type == ClauseType.SVOC:
+                elif self.type == ClauseTypeSVOC:
                     svoc_obj: Span
                     for svoc_obj in indirect_objects + direct_objects:
                         if complements:
@@ -324,7 +312,7 @@ class Clause:
                                     yield from _convert_clauses_to_text(ret,inflection,capitalize)
                                 else:
                                     yield ret
-                elif self.type == ClauseType.SVC:
+                elif self.type == ClauseTypeSVC:
                      if complements:
                         for complement in complements:
                             ret = tuple(prop + [complement])
@@ -340,115 +328,8 @@ class Clause:
                             else:
                                 yield ret
 
-        # # Remove doubles
-        # propositions = list(set(propositions))
-        # 
-        # if as_text:
-        #     return _convert_clauses_to_text(propositions, inflection=inflection, capitalize=capitalize)
 
-
-    # def to_propositions(
-    #         self,
-    #         as_text: bool = False,
-    #         inflection: Optional[Union[str,Literal[False]]] = "VBD",
-    #         capitalize: bool = False
-    # ) -> List[Union[Tuple[Span,str,Span],Tuple[Span,Span,Span],Tuple[Span,Span,Span,Span],]]:
-    # 
-    #     if inflection and not as_text:
-    #         logging.warning(
-    #             "`inflection' argument is ignored when `as_text==False'. "
-    #             "To suppress this warning call `to_propositions' with the argument `inflection=None'"
-    #         )
-    #     if capitalize and not as_text:
-    #         logging.warning(
-    #             "`capitalize' argument is ignored when `as_text==False'. "
-    #             "To suppress this warning call `to_propositions' with the argument `capitalize=False"
-    #         )
-    # 
-    #     propositions: List[
-    #         Union[
-    #             Tuple[Span,str,Span],
-    #             Tuple[Span,Span,Span],
-    #             Tuple[Span,Span,Span,Span],
-    #         ]
-    #     ] = []
-    # 
-    #     subjects:         List[Span] = extract_ccs_from_token_at_root(self.subject)
-    #     direct_objects:   List[Span] = extract_ccs_from_token_at_root(self.direct_object)
-    #     indirect_objects: List[Span] = extract_ccs_from_token_at_root(self.indirect_object)
-    #     complements:      List[Span] = extract_ccs_from_token_at_root(self.complement)
-    #     verbs:            List[Span] = [self.verb] if self.verb else []
-    # 
-    #     subj: Span
-    #     for subj in subjects:
-    #         if complements and not verbs:
-    #             c0: Span
-    #             for c0 in complements:
-    #                 propositions.append(tuple([subj, "is", c0]))
-    #             propositions.append(tuple([subj, "is"]) + tuple(complements))
-    # 
-    #         verb: Span
-    #         for verb in verbs:
-    #             prop: List[Span] = [subj, verb]
-    #             if self.type in [ClauseType.SV, ClauseType.SVA]:
-    #                 if self.adverbials:
-    #                     a1: Span
-    #                     for a1 in self.adverbials:
-    #                         propositions.append(tuple(prop + [a1]))
-    #                     propositions.append(tuple(prop + self.adverbials))
-    #                 else:
-    #                     propositions.append(tuple(prop))
-    # 
-    #             elif self.type == ClauseType.SVOO:
-    #                 iobj: Span
-    #                 dobj: Span
-    #                 for iobj in indirect_objects:
-    #                     for dobj in direct_objects:
-    #                         propositions.append((subj, verb, iobj, dobj))
-    #             elif self.type == ClauseType.SVO:
-    #                 obj2: Span
-    #                 a2: Span
-    #                 for obj2 in direct_objects + indirect_objects:
-    #                     propositions.append((subj, verb, obj2))
-    #                     if self.adverbials:
-    #                         for a2 in self.adverbials:
-    #                             propositions.append((subj, verb, obj2, a2))
-    #             elif self.type == ClauseType.SVOA:
-    #                 obj3: Span
-    #                 a3: Span
-    #                 for obj3 in direct_objects:
-    #                     if self.adverbials:
-    #                         for a3 in self.adverbials:
-    #                             propositions.append(tuple(prop + [obj3, a3]))
-    #                         propositions.append(tuple(prop + [obj3] + self.adverbials))
-    # 
-    #             elif self.type == ClauseType.SVOC:
-    #                 obj4: Span
-    #                 c4: Span
-    #                 for obj4 in indirect_objects + direct_objects:
-    #                     if complements:
-    #                         for c3 in complements:
-    #                             propositions.append(tuple(prop + [obj4, c4]))
-    #                         propositions.append(tuple(prop + [obj4] + complements))
-    #             elif self.type == ClauseType.SVC:
-    #                 c5: Span
-    #                 if complements:
-    #                     for c5 in complements:
-    #                         propositions.append(tuple(prop + [c5]))
-    #                     propositions.append(tuple(prop + complements))
-    # 
-    #     # Remove doubles
-    #     propositions = list(set(propositions))
-    # 
-    #     if as_text:
-    #         return _convert_clauses_to_text(
-    #             propositions, inflection=inflection, capitalize=capitalize
-    #         )
-    # 
-    #     return propositions
-
-
-@lru_cache(typed=True)
+@lru_cache(typed=True,maxsize=10000)
 def inflect_token(token: Token, inflection: Optional[Union[str,Literal[False]]] = "VBD",) -> str:
     tt: Token
     if (
@@ -488,29 +369,14 @@ def _convert_clauses_to_text(
             yield " ".join(span_texts).capitalize() + "."
 
 
-_verb_phrase_rules: List[Tuple[str,List[List[Dict[str,str]]]]] = [
-    (
-        "Auxiliary verb phrase aux-verb",
-        [[ {"POS": "AUX"}, {"POS": "VERB"} ]]
-    ),
-    (
-        "Auxiliary verb phrase",
-        [[ {"POS": "AUX"} ]]
-    ),
-    (
-        "Verb phrase",
-        [[ {"POS": "VERB"} ]]
-    )
-]
-
-
+@lru_cache(typed=True,maxsize=10000)
 def _get_verb_matches(span:Span) -> List[Tuple[int,int,int]]:
     # 1. Find verb phrases in the span
     # (see mdmjsh answer here: https://stackoverflow.com/questions/47856247/extract-verb-phrases-using-spacy)
     verb_matcher: Matcher = Matcher(span.vocab)
     n: str
     v: List[List[Dict[str,str]]]
-    for n,v in _verb_phrase_rules:
+    for n,v in verb_phrase_rules:
         verb_matcher.add(n,v)
     return verb_matcher(span)
 
@@ -529,6 +395,7 @@ def _get_verb_chunks(span:Span) -> Generator[Span, None, None]:
             yield match
 
 
+@lru_cache(typed=True,maxsize=10000)
 def _get_subject(verb: Span) -> Union[None,Span]:
     root: Token = verb.root
     flag: bool = False
@@ -548,11 +415,13 @@ def _get_subject(verb: Span) -> Union[None,Span]:
     return None
 
 
-def _find_matching_child(root: Token, allowed_types: List[str]) -> Union[None,Span]:
+@lru_cache(typed=True,maxsize=10000)
+def _find_matching_child(root: Token, allowed_types: Tuple[str, ...]) -> Optional[Span]:
     c: Token
-    for c in root.children:
-        if c.dep_ in allowed_types:
-            return extract_span_from_entity(c)
+    cc: Token
+    # This only seems to ever have one item (or perhaps only interested in the first??)
+    for cc in ( c for c in root.children if c.dep_ in allowed_types ):
+        return extract_span_from_entity(cc)
     return None
 
 
@@ -575,10 +444,10 @@ def extract_clauses(span: Span) -> Generator[Optional[Clause], None, None]:
                     complement=extract_span_from_entity(c)
                 )
 
-        indirect_object = _find_matching_child(verb.root, ["dative"])
-        direct_object = _find_matching_child(verb.root, ["dobj"])
+        indirect_object = _find_matching_child(verb.root, tuple(["dative"]))
+        direct_object = _find_matching_child(verb.root, tuple(["dobj"]))
         complement = _find_matching_child(
-            verb.root, ["ccomp", "acomp", "xcomp", "attr"]
+            verb.root, tuple(["ccomp", "acomp", "xcomp", "attr"])
         )
         adverbials = [
             extract_span_from_entity(c)
@@ -596,54 +465,52 @@ def extract_clauses(span: Span) -> Generator[Optional[Clause], None, None]:
         )
 
 
+@lru_cache(typed=True,maxsize=10000)
 def extract_span_from_entity(token: Token) -> Span:
-    ent_subtree: List[Token] = sorted([c for c in token.subtree], key=lambda x: x.i)
-    return Span(token.doc, start=ent_subtree[0].i, end=ent_subtree[-1].i + 1)
+    return Span(token.doc, start=min(token.subtree).i, end=max(token.subtree).i + 1)
 
 
+@lru_cache(typed=True,maxsize=10000)
 def extract_span_from_entity_no_cc(token: Token) -> Span:
     c: Token
-    x: Token
-    ent_subtree = sorted(
-        [token] + [c for c in token.children if c.dep_ not in ["cc", "conj", "prep"]],
-        key=lambda x: x.i,
+    ent_subtree: List[Token] = sorted(
+        [token] + [
+            c for c in token.children if c.dep_ not in ["cc", "conj", "prep"]
+        ]
     )
-    return Span(token.doc, start=ent_subtree[0].i, end=ent_subtree[-1].i + 1)
+    return Span(token.doc, start=min(ent_subtree).i, end=max(ent_subtree).i + 1)
 
 
-def extract_ccs_from_entity(token: Token) -> List[Span]:
-    entities: List[Span] = [extract_span_from_entity_no_cc(token)]
+def extract_ccs_from_entity(token: Token) -> Generator[Span, None, None]:
+    yield extract_span_from_entity_no_cc(token)
     c: Token
     for c in token.children:
         if c.dep_ in ["conj", "cc"]:
-            entities += extract_ccs_from_entity(c)
-    return entities
+            yield from extract_ccs_from_entity(c)
 
 
 def extract_ccs_from_token_at_root(span: Union[Span,None]) -> List[Span]:
     if span is None:
         return []
     else:
-        return extract_ccs_from_token(span.root)
+        return list(extract_ccs_from_token(span.root))
 
 
-def extract_ccs_from_token(token: Token) -> List[Span]:
+def extract_ccs_from_token(token: Token) -> Generator[Span, None, None]:
     if token.pos_ in ["NOUN", "PROPN", "ADJ"]:
+        c: Token
         children = sorted(
             [token] + [
-                c
-                for c in token.children
+                c for c in token.children
                 if c.dep_ in ["advmod", "amod", "det", "poss", "compound"]
-            ],
-            key=lambda x: x.i,
+            ]
         )
-        entities = [Span(token.doc, start=children[0].i, end=children[-1].i + 1)]
+        yield Span(token.doc, start=min(children).i, end=max(children).i + 1)
     else:
-        entities = [Span(token.doc, start=token.i, end=token.i + 1)]
+        yield Span(token.doc, start=token.i, end=token.i + 1)
     for c in token.children:
         if c.dep_ == "conj":
-            entities += extract_ccs_from_token(c)
-    return entities
+            yield from extract_ccs_from_token(c)
 
 
 # if __name__ == "__main__":
