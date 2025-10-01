@@ -21,12 +21,15 @@ from .consts import (
 )
 from .custom_types import PropositionType, PropositionTypes
 
+# ?? Should these move to func below?
 Doc.set_extension("clauses", default=[], force=True)
 Span.set_extension("clauses", default=[], force=True)
 
 
 @Language.component("claucy")
 def extract_clauses_doc(doc:Doc) -> Doc:
+    # Doc.set_extension("clauses", default=[], force=True)
+    # Span.set_extension("clauses", default=[], force=True)
     sent: Span
     for sent in doc.sents:
         clauses = list(extract_clauses(sent))
